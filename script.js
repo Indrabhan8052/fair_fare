@@ -1360,9 +1360,12 @@ function getAgo(iso){
 
 // ── EmailJS init ───────────────────────────────────────────────
 function initEmailJS(){
-  // publicKey is now passed per-send as 4th param — no global init needed
   const cfg=getCfg(KEYS.ejs);
-  return !!(cfg?.publicKey && cfg?.serviceId && cfg?.templateId && window.emailjs);
+  if(cfg?.publicKey && window.emailjs){
+    emailjs.init(cfg.publicKey);
+    return true;
+  }
+  return false;
 }
 
 // ── Firebase init ──────────────────────────────────────────────
@@ -1499,19 +1502,18 @@ async function sendEmailOTP(email, name){
   const ejsCfg = getCfg(KEYS.ejs);
   if(ejsCfg?.serviceId && ejsCfg?.templateId && ejsCfg?.publicKey && window.emailjs){
     try{
-      // Correct method: pass publicKey as 4th param — works on every call, no init() needed
+      emailjs.init(ejsCfg.publicKey);
       await emailjs.send(ejsCfg.serviceId, ejsCfg.templateId, {
         to_email: email,
         to_name:  name || 'User',
         otp_code: code,
         app_name: 'Fair Fare',
         expiry:   '10 minutes'
-      }, { publicKey: ejsCfg.publicKey });
+      });
       showToast('OTP sent to '+email+' 📧');
       return true;
     }catch(e){
-      console.error('EmailJS send failed:',e?.status, e?.text);
-      showToast('❌ OTP email failed ('+( e?.status||'err' )+') — check EmailJS config');
+      console.error('EmailJS send failed:',e);
       // Fall through to on-screen fallback
     }
   }
@@ -1791,20 +1793,19 @@ async function doPasswordReset(){
     const ejsCfg = getCfg(KEYS.ejs);
     if(ejsCfg?.serviceId && ejsCfg?.templateId && ejsCfg?.publicKey && window.emailjs){
       try{
-        // Correct method: publicKey as 4th param — reliable on every call
+        emailjs.init(ejsCfg.publicKey);
         await emailjs.send(ejsCfg.serviceId, ejsCfg.templateId, {
           to_email: email, to_name: 'User',
           otp_code: code, app_name: 'Fair Fare', expiry: '10 minutes'
-        }, { publicKey: ejsCfg.publicKey });
+        });
         showToast('Reset code sent to '+email+' 📧');
       }catch(e){
-        console.error('EmailJS reset OTP failed:',e?.status, e?.text);
-        showToast('❌ Reset email failed — showing code on screen');
-        showOtpFallback(code, email);
+        console.error('EmailJS reset OTP failed:',e);
+        showToast('Reset code: '+code+' (EmailJS not configured)');
       }
     } else {
       console.log('🔐 Password Reset OTP for', email, ':', code);
-      showOtpFallback(code, email);
+      showToast('Reset code: '+code+' 📨');
     }
     renderAuthScreen('resetotp');
     startOtpTimer('reset-timer', 60, ()=>renderAuthScreen('reset'));
@@ -2332,7 +2333,7 @@ function saveEmailJSConfig(){
     showToast('Fill in all three EmailJS fields'); return;
   }
   setCfg(KEYS.ejs, cfg);
-  // No init needed — publicKey passed directly in each send() call
+  if(window.emailjs) emailjs.init(cfg.publicKey);
   showToast('✅ EmailJS saved — OTPs will now be emailed');
   renderAuthScreen('settings');
 }
