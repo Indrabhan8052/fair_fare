@@ -29,6 +29,16 @@
   </div>
 </div>
 
+<!-- EMAILJS CONFIG NOTICE -->
+<div id="ejConfigNotice" class="fb-config-notice" style="display:none">
+  <div class="fb-config-content">
+    <div class="fb-config-title">📧 Configure EmailJS</div>
+    <div class="fb-config-text">To enable email features, please add your EmailJS credentials</div>
+    <button class="auth-btn" onclick="openEjSettings()">Add EmailJS Config</button>
+    <button class="auth-sec" onclick="closeEjNotice()">Skip for now</button>
+  </div>
+</div>
+
 <div id="splash" class="hide">
   <div class="splash-ring"></div>
   <div class="splash-ring"></div>
@@ -266,16 +276,127 @@
   </div>
 </div>
 
+<!-- EMAILJS SETTINGS OVERLAY -->
+<div id="ejSettingsOv" style="display:none;position:absolute;inset:0;z-index:960;background:rgba(0,0,0,.8);backdrop-filter:blur(4px);flex-direction:column;justify-content:flex-end;align-items:center" onclick="closeEjSettings(event)">
+  <div class="fb-settings-sheet" onclick="event.stopPropagation()">
+    <div class="sh"></div>
+    <div class="fb-settings-close" onclick="closeEjSettings()">✕</div>
+    <div class="fb-settings-title">📧 EmailJS Configuration</div>
+    <div class="fb-settings-sub">Enter your EmailJS credentials to enable email features</div>
+
+    <div class="fb-field">
+      <label class="fb-label">Public Key <span class="fb-required">*</span></label>
+      <input type="text" class="fb-input" id="ejPublicKey" placeholder="e.g. user_xxxxxxxxxxxxxxxxx"/>
+    </div>
+
+    <div class="fb-field">
+      <label class="fb-label">Service ID <span class="fb-required">*</span></label>
+      <input type="text" class="fb-input" id="ejServiceId" placeholder="e.g. service_xxxxxxx"/>
+    </div>
+
+    <div class="fb-field">
+      <label class="fb-label">Template ID <span class="fb-required">*</span></label>
+      <input type="text" class="fb-input" id="ejTemplateId" placeholder="e.g. template_xxxxxxx"/>
+    </div>
+
+    <div class="fb-help">
+      <div class="fb-help-title">📖 How to get EmailJS credentials:</div>
+      <ol class="fb-help-list">
+        <li>Go to <a href="https://www.emailjs.com" target="_blank" rel="noopener">emailjs.com</a> and log in</li>
+        <li><b>Public Key:</b> Account → API Keys → Public Key</li>
+        <li><b>Service ID:</b> Email Services → your service → Service ID</li>
+        <li><b>Template ID:</b> Email Templates → your template → Template ID</li>
+      </ol>
+    </div>
+
+    <button class="auth-btn" onclick="saveEjConfig()">💾 Save EmailJS Config</button>
+    <button class="auth-sec" onclick="testEjConfig()">🧪 Test Configuration</button>
+    <button class="auth-sec" style="color:var(--red);margin-top:8px" onclick="clearEjConfig()">🗑️ Clear Configuration</button>
+    <div style="height:20px"></div>
+  </div>
+</div>
+
 <!-- SEARCH SHEET -->
 <div class="so" id="sheetOv" onclick="closeSheet(event)">
   <div class="sp" onclick="event.stopPropagation()">
     <div class="sh"></div>
     <div class="stitle" id="sheetTitle">Search</div>
     <input class="sinp" id="sheetInp" placeholder="Type area or landmark…" autocomplete="off" oninput="onSearch(this.value)"/>
+    <div id="locBtn" onclick="useCurrentLocation()" style="display:none;align-items:center;gap:10px;padding:11px 13px;border-radius:11px;cursor:pointer;background:rgba(26,110,245,.08);border:1.5px solid rgba(26,110,245,.25);margin-bottom:10px;transition:background .15s">
+      <span id="locBtnIcon" style="font-size:18px">📍</span>
+      <div>
+        <div style="font-size:14px;font-weight:600;color:var(--blue)">Use Current Location</div>
+        <div id="locBtnSub" style="font-size:11px;color:var(--muted);margin-top:1px">Tap to auto-detect your position</div>
+      </div>
+    </div>
     <div class="sload" id="sLoad"><div class="spinner"></div><br/>Searching…</div>
     <div class="pl" id="placeList"></div>
   </div>
 </div>
 </div>
 
+<script>
+/* ── EmailJS Config Helpers ── */
+function openEjSettings(){
+  const ov = document.getElementById('ejSettingsOv');
+  ov.style.display = 'flex';
+  // Pre-fill saved values
+  const saved = JSON.parse(localStorage.getItem('ej_config')||'{}');
+  document.getElementById('ejPublicKey').value  = saved.publicKey  || '';
+  document.getElementById('ejServiceId').value  = saved.serviceId  || '';
+  document.getElementById('ejTemplateId').value = saved.templateId || '';
+}
+function closeEjSettings(e){
+  if(e && e.target !== document.getElementById('ejSettingsOv')) return;
+  document.getElementById('ejSettingsOv').style.display='none';
+}
+function saveEjConfig(){
+  const pk  = document.getElementById('ejPublicKey').value.trim();
+  const sid = document.getElementById('ejServiceId').value.trim();
+  const tid = document.getElementById('ejTemplateId').value.trim();
+  if(!pk||!sid||!tid){
+    alert('⚠️ Please fill in all required fields (Public Key, Service ID, Template ID).');
+    return;
+  }
+  localStorage.setItem('ej_config', JSON.stringify({publicKey:pk, serviceId:sid, templateId:tid}));
+  try{ emailjs.init(pk); }catch(e){}
+  document.getElementById('ejSettingsOv').style.display='none';
+  document.getElementById('ejConfigNotice').style.display='none';
+  showToast('✅ EmailJS configured successfully!');
+}
+function testEjConfig(){
+  const pk  = document.getElementById('ejPublicKey').value.trim();
+  const sid = document.getElementById('ejServiceId').value.trim();
+  const tid = document.getElementById('ejTemplateId').value.trim();
+  if(!pk||!sid||!tid){ alert('⚠️ Fill all fields before testing.'); return; }
+  try{
+    emailjs.init(pk);
+    alert('✅ EmailJS initialised! Service ID: '+sid+'\nTemplate ID: '+tid+'\n\nSend a test email from your EmailJS dashboard to confirm.');
+  }catch(e){ alert('❌ Error: '+e.message); }
+}
+function clearEjConfig(){
+  if(!confirm('Clear saved EmailJS configuration?')) return;
+  localStorage.removeItem('ej_config');
+  document.getElementById('ejPublicKey').value='';
+  document.getElementById('ejServiceId').value='';
+  document.getElementById('ejTemplateId').value='';
+  showToast('🗑️ EmailJS config cleared.');
+}
+function closeEjNotice(){
+  document.getElementById('ejConfigNotice').style.display='none';
+}
+// Auto-init EmailJS from saved config on load
+(function(){
+  const saved = JSON.parse(localStorage.getItem('ej_config')||'{}');
+  if(saved.publicKey){
+    try{ emailjs.init(saved.publicKey); }catch(e){}
+  }
+})();
+// Helper toast (uses existing if available)
+function showToast(msg){
+  const t = document.getElementById('toast');
+  if(t){ t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),3000); }
+  else{ console.log(msg); }
+}
+</script>
 </body>
