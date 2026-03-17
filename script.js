@@ -1360,13 +1360,9 @@ function getAgo(iso){
 
 // ── EmailJS init ───────────────────────────────────────────────
 function initEmailJS(){
+  // publicKey is now passed per-send as 4th param — no global init needed
   const cfg=getCfg(KEYS.ejs);
-  if(cfg?.publicKey && window.emailjs){
-    // Use object-form init — works reliably on repeated calls
-    try{ emailjs.init({publicKey: cfg.publicKey}); }catch(_){}
-    return true;
-  }
-  return false;
+  return !!(cfg?.publicKey && cfg?.serviceId && cfg?.templateId && window.emailjs);
 }
 
 // ── Firebase init ──────────────────────────────────────────────
@@ -1464,12 +1460,7 @@ async function submitEmailAuth(){
       const sent = await sendEmailOTP(email, name||'User');
       if(sent){
         renderAuthScreen('otp');
-        startOtpTimer('otp-timer', 60, async ()=>{
-          // Resend OTP instead of going back to form
-          showToast('Resending OTP...');
-          await sendEmailOTP(AUTH.pendingEmail, AUTH.pendingName||'User');
-          startOtpTimer('otp-timer', 60, ()=>{ AUTH.otpPending=false; AUTH.pendingPass=''; renderAuthScreen('form'); });
-        });
+        startOtpTimer('otp-timer', 60, ()=>{ AUTH.otpPending=false; AUTH.pendingPass=''; renderAuthScreen('form'); });
         setTimeout(()=>document.getElementById('otp0')?.focus(), 120);
       } else {
         AUTH.otpPending=false; AUTH.pendingPass='';
@@ -1481,11 +1472,7 @@ async function submitEmailAuth(){
       const sent = await sendEmailOTP(email, name);
       if(sent){
         renderAuthScreen('otp');
-        startOtpTimer('otp-timer', 60, async ()=>{
-          showToast('Resending OTP...');
-          await sendEmailOTP(AUTH.pendingEmail, AUTH.pendingName||'User');
-          startOtpTimer('otp-timer', 60, ()=>{ AUTH.otpPending=false; AUTH.pendingPass=''; renderAuthScreen('form'); });
-        });
+        startOtpTimer('otp-timer', 60, ()=>{ AUTH.otpPending=false; AUTH.pendingPass=''; renderAuthScreen('form'); });
         setTimeout(()=>document.getElementById('otp0')?.focus(), 120);
       } else {
         AUTH.otpPending=false; AUTH.pendingPass='';
@@ -1503,11 +1490,8 @@ async function submitEmailAuth(){
 
 // ═══ EMAIL OTP GENERATION & SENDING ═══════════════════════════
 async function sendEmailOTP(email, name){
-  // Always clear previous OTP before generating new — prevents stale code issues
-  AUTH.otpCode   = '';
-  AUTH.otpExpiry = 0;
-
   const code = String(Math.floor(100000 + Math.random() * 899999));
+  // Store ONLY in memory — no Firestore needed, avoids auth permission errors
   AUTH.otpCode   = code;
   AUTH.otpExpiry = Date.now() + 10*60*1000; // 10 min
 
@@ -1515,29 +1499,25 @@ async function sendEmailOTP(email, name){
   const ejsCfg = getCfg(KEYS.ejs);
   if(ejsCfg?.serviceId && ejsCfg?.templateId && ejsCfg?.publicKey && window.emailjs){
     try{
-      // Re-init every time using object form — fixes silent failure on 2nd+ send
-      try{ emailjs.init({publicKey: ejsCfg.publicKey}); }catch(_){}
+      // Correct method: pass publicKey as 4th param — works on every call, no init() needed
       await emailjs.send(ejsCfg.serviceId, ejsCfg.templateId, {
         to_email: email,
         to_name:  name || 'User',
         otp_code: code,
         app_name: 'Fair Fare',
         expiry:   '10 minutes'
-      });
+      }, { publicKey: ejsCfg.publicKey });
       showToast('OTP sent to '+email+' 📧');
       return true;
     }catch(e){
-      console.error('EmailJS send failed:', e?.status, e?.text, e);
-      if(e?.status===401)      showToast('❌ EmailJS: Invalid Public Key — recheck settings');
-      else if(e?.status===404) showToast('❌ EmailJS: Wrong Service or Template ID');
-      else if(e?.status===429) showToast('❌ EmailJS: Daily limit reached — try tomorrow');
-      else                     showToast('❌ OTP email failed — showing code on screen');
+      console.error('EmailJS send failed:',e?.status, e?.text);
+      showToast('❌ OTP email failed ('+( e?.status||'err' )+') — check EmailJS config');
       // Fall through to on-screen fallback
     }
   }
 
-  // ── Fallback: show OTP on screen (dev mode / EmailJS not set) ─
-  console.log('📧 OTP for', email, ':', code);
+  // ── Fallback: show OTP on screen (dev mode) ──────────────────
+  console.log('📧 OTP for',email,':',code);
   showOtpFallback(code, email);
   return true;
 }
@@ -1807,18 +1787,18 @@ async function doPasswordReset(){
     AUTH.otpCode      = code;
     AUTH.otpExpiry    = Date.now() + 10*60*1000;
 
-    // Send via EmailJS — re-init every time to prevent stale state
+    // Send via EmailJS
     const ejsCfg = getCfg(KEYS.ejs);
     if(ejsCfg?.serviceId && ejsCfg?.templateId && ejsCfg?.publicKey && window.emailjs){
       try{
-        try{ emailjs.init({publicKey: ejsCfg.publicKey}); }catch(_){}
+        // Correct method: publicKey as 4th param — reliable on every call
         await emailjs.send(ejsCfg.serviceId, ejsCfg.templateId, {
           to_email: email, to_name: 'User',
           otp_code: code, app_name: 'Fair Fare', expiry: '10 minutes'
-        });
+        }, { publicKey: ejsCfg.publicKey });
         showToast('Reset code sent to '+email+' 📧');
       }catch(e){
-        console.error('EmailJS reset OTP failed:', e?.status, e?.text, e);
+        console.error('EmailJS reset OTP failed:',e?.status, e?.text);
         showToast('❌ Reset email failed — showing code on screen');
         showOtpFallback(code, email);
       }
@@ -2352,8 +2332,7 @@ function saveEmailJSConfig(){
     showToast('Fill in all three EmailJS fields'); return;
   }
   setCfg(KEYS.ejs, cfg);
-  // Object-form init — reliable on every call, not just the first
-  if(window.emailjs){ try{ emailjs.init({publicKey: cfg.publicKey}); }catch(_){} }
+  // No init needed — publicKey passed directly in each send() call
   showToast('✅ EmailJS saved — OTPs will now be emailed');
   renderAuthScreen('settings');
 }
