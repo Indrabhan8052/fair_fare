@@ -2,6 +2,8 @@
 // GLOBAL CONSTANTS (must be first — used everywhere)
 // ═══════════════════════════════════════════════════════════════
 const KEYS = { ejs: 'ff_ejscfg', fb: 'ff_fbcfg' };
+// ★ Set this to your email — only this account sees Firebase/App Settings
+const ADMIN_EMAIL = 'indrabhan919@gmail.com';
 const AVATARS = ['😊','😎','🧑','👩','🧔','👱','🧕','🧑‍💻','🧑‍🎓','👨‍✈️','🦸','🧙','🐯','🦊','🦁','🐻','🌟','🚀','🎯','🏆','🌈','⚡','🔥','💫'];
 const AUTH = {
   mode: 'login',
@@ -832,9 +834,76 @@ function openSheet(type){
   document.getElementById('sheetInp').value='';
   document.getElementById('placeList').innerHTML='';
   document.getElementById('sLoad').style.display='none';
+  // Show current location button only for "From" field
+  const locBtn=document.getElementById('locBtn');
+  if(locBtn){
+    locBtn.style.display=type==='from'?'flex':'none';
+    document.getElementById('locBtnSub').textContent='Tap to auto-detect your position';
+    document.getElementById('locBtnIcon').textContent='📍';
+  }
   document.getElementById('sheetOv').classList.add('open');
   buildPlaceItems(PLACES[S.city?.id]||[]);
   setTimeout(()=>document.getElementById('sheetInp').focus(),220);
+}
+
+// ── Current Location ─────────────────────────────────────────
+function useCurrentLocation(){
+  if(!navigator.geolocation){
+    showToast('Geolocation not supported by your browser');
+    return;
+  }
+  // Update button to loading state
+  document.getElementById('locBtnIcon').textContent='⏳';
+  document.getElementById('locBtnSub').textContent='Detecting your location…';
+  document.getElementById('locBtn').style.opacity='0.7';
+
+  navigator.geolocation.getCurrentPosition(
+    async (pos)=>{
+      const {latitude:lat, longitude:lng} = pos.coords;
+      document.getElementById('locBtnSub').textContent='Reverse geocoding…';
+      try{
+        const r = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=en`,
+          {headers:{'User-Agent':'FairFareApp/1.0'}}
+        );
+        const d = await r.json();
+        const name =
+          d.address?.suburb ||
+          d.address?.neighbourhood ||
+          d.address?.quarter ||
+          d.address?.village ||
+          d.address?.town ||
+          d.address?.city_district ||
+          d.name ||
+          d.display_name?.split(',')[0] ||
+          'Current Location';
+        const addr = [
+          d.address?.city || d.address?.town || d.address?.district || '',
+          d.address?.state || ''
+        ].filter(Boolean).join(', ');
+        pickPlace({name, addr, lat, lng});
+      }catch(e){
+        // Fallback: use raw coords as a place
+        pickPlace({name:'Current Location', addr:`${lat.toFixed(4)}, ${lng.toFixed(4)}`, lat, lng});
+      }
+      // Reset button
+      document.getElementById('locBtnIcon').textContent='📍';
+      document.getElementById('locBtnSub').textContent='Tap to auto-detect your position';
+      document.getElementById('locBtn').style.opacity='1';
+    },
+    (err)=>{
+      document.getElementById('locBtnIcon').textContent='📍';
+      document.getElementById('locBtn').style.opacity='1';
+      const msgs={
+        1:'Location permission denied. Please allow in browser settings.',
+        2:'Location unavailable. Check GPS/network.',
+        3:'Location request timed out.'
+      };
+      document.getElementById('locBtnSub').textContent=msgs[err.code]||'Could not get location';
+      showToast(msgs[err.code]||'Location error');
+    },
+    {enableHighAccuracy:true, timeout:10000, maximumAge:30000}
+  );
 }
 function closeSheet(e){
   if(!e||e.target===document.getElementById('sheetOv')){
@@ -1293,7 +1362,8 @@ function getAgo(iso){
 function initEmailJS(){
   const cfg=getCfg(KEYS.ejs);
   if(cfg?.publicKey && window.emailjs){
-    emailjs.init(cfg.publicKey);
+    // Use object-form init — works reliably on repeated calls
+    try{ emailjs.init({publicKey: cfg.publicKey}); }catch(_){}
     return true;
   }
   return false;
@@ -1394,7 +1464,12 @@ async function submitEmailAuth(){
       const sent = await sendEmailOTP(email, name||'User');
       if(sent){
         renderAuthScreen('otp');
-        startOtpTimer('otp-timer', 60, ()=>{ AUTH.otpPending=false; AUTH.pendingPass=''; renderAuthScreen('form'); });
+        startOtpTimer('otp-timer', 60, async ()=>{
+          // Resend OTP instead of going back to form
+          showToast('Resending OTP...');
+          await sendEmailOTP(AUTH.pendingEmail, AUTH.pendingName||'User');
+          startOtpTimer('otp-timer', 60, ()=>{ AUTH.otpPending=false; AUTH.pendingPass=''; renderAuthScreen('form'); });
+        });
         setTimeout(()=>document.getElementById('otp0')?.focus(), 120);
       } else {
         AUTH.otpPending=false; AUTH.pendingPass='';
@@ -1406,7 +1481,11 @@ async function submitEmailAuth(){
       const sent = await sendEmailOTP(email, name);
       if(sent){
         renderAuthScreen('otp');
-        startOtpTimer('otp-timer', 60, ()=>{ AUTH.otpPending=false; AUTH.pendingPass=''; renderAuthScreen('form'); });
+        startOtpTimer('otp-timer', 60, async ()=>{
+          showToast('Resending OTP...');
+          await sendEmailOTP(AUTH.pendingEmail, AUTH.pendingName||'User');
+          startOtpTimer('otp-timer', 60, ()=>{ AUTH.otpPending=false; AUTH.pendingPass=''; renderAuthScreen('form'); });
+        });
         setTimeout(()=>document.getElementById('otp0')?.focus(), 120);
       } else {
         AUTH.otpPending=false; AUTH.pendingPass='';
@@ -1424,8 +1503,11 @@ async function submitEmailAuth(){
 
 // ═══ EMAIL OTP GENERATION & SENDING ═══════════════════════════
 async function sendEmailOTP(email, name){
+  // Always clear previous OTP before generating new — prevents stale code issues
+  AUTH.otpCode   = '';
+  AUTH.otpExpiry = 0;
+
   const code = String(Math.floor(100000 + Math.random() * 899999));
-  // Store ONLY in memory — no Firestore needed, avoids auth permission errors
   AUTH.otpCode   = code;
   AUTH.otpExpiry = Date.now() + 10*60*1000; // 10 min
 
@@ -1433,7 +1515,8 @@ async function sendEmailOTP(email, name){
   const ejsCfg = getCfg(KEYS.ejs);
   if(ejsCfg?.serviceId && ejsCfg?.templateId && ejsCfg?.publicKey && window.emailjs){
     try{
-      emailjs.init(ejsCfg.publicKey);
+      // Re-init every time using object form — fixes silent failure on 2nd+ send
+      try{ emailjs.init({publicKey: ejsCfg.publicKey}); }catch(_){}
       await emailjs.send(ejsCfg.serviceId, ejsCfg.templateId, {
         to_email: email,
         to_name:  name || 'User',
@@ -1444,13 +1527,17 @@ async function sendEmailOTP(email, name){
       showToast('OTP sent to '+email+' 📧');
       return true;
     }catch(e){
-      console.error('EmailJS send failed:',e);
+      console.error('EmailJS send failed:', e?.status, e?.text, e);
+      if(e?.status===401)      showToast('❌ EmailJS: Invalid Public Key — recheck settings');
+      else if(e?.status===404) showToast('❌ EmailJS: Wrong Service or Template ID');
+      else if(e?.status===429) showToast('❌ EmailJS: Daily limit reached — try tomorrow');
+      else                     showToast('❌ OTP email failed — showing code on screen');
       // Fall through to on-screen fallback
     }
   }
 
-  // ── Fallback: show OTP on screen (dev mode) ──────────────────
-  console.log('📧 OTP for',email,':',code);
+  // ── Fallback: show OTP on screen (dev mode / EmailJS not set) ─
+  console.log('📧 OTP for', email, ':', code);
   showOtpFallback(code, email);
   return true;
 }
@@ -1720,23 +1807,24 @@ async function doPasswordReset(){
     AUTH.otpCode      = code;
     AUTH.otpExpiry    = Date.now() + 10*60*1000;
 
-    // Send via EmailJS
+    // Send via EmailJS — re-init every time to prevent stale state
     const ejsCfg = getCfg(KEYS.ejs);
     if(ejsCfg?.serviceId && ejsCfg?.templateId && ejsCfg?.publicKey && window.emailjs){
       try{
-        emailjs.init(ejsCfg.publicKey);
+        try{ emailjs.init({publicKey: ejsCfg.publicKey}); }catch(_){}
         await emailjs.send(ejsCfg.serviceId, ejsCfg.templateId, {
           to_email: email, to_name: 'User',
           otp_code: code, app_name: 'Fair Fare', expiry: '10 minutes'
         });
         showToast('Reset code sent to '+email+' 📧');
       }catch(e){
-        console.error('EmailJS reset OTP failed:',e);
-        showToast('Reset code: '+code+' (EmailJS not configured)');
+        console.error('EmailJS reset OTP failed:', e?.status, e?.text, e);
+        showToast('❌ Reset email failed — showing code on screen');
+        showOtpFallback(code, email);
       }
     } else {
       console.log('🔐 Password Reset OTP for', email, ':', code);
-      showToast('Reset code: '+code+' 📨');
+      showOtpFallback(code, email);
     }
     renderAuthScreen('resetotp');
     startOtpTimer('reset-timer', 60, ()=>renderAuthScreen('reset'));
@@ -2264,7 +2352,8 @@ function saveEmailJSConfig(){
     showToast('Fill in all three EmailJS fields'); return;
   }
   setCfg(KEYS.ejs, cfg);
-  if(window.emailjs) emailjs.init(cfg.publicKey);
+  // Object-form init — reliable on every call, not just the first
+  if(window.emailjs){ try{ emailjs.init({publicKey: cfg.publicKey}); }catch(_){} }
   showToast('✅ EmailJS saved — OTPs will now be emailed');
   renderAuthScreen('settings');
 }
@@ -2672,7 +2761,9 @@ function renderAccount(){
   </div>
   <div class="ash">Quick Actions</div>
   <div class="ai2" onclick="switchTab('recent')"><div class="aic" style="background:rgba(26,110,245,.12)">🗺️</div><div class="ail">Recent Routes</div><div class="aiv">${S.recent.length} saved</div></div>
-  <div class="ai2" onclick="openFirebaseSettings()"><div class="aic" style="background:rgba(255,183,0,.1)">🔐</div><div class="ail">Firebase Settings</div><div class="aiv" style="color:${getCfg(KEYS.fb)?'var(--green)':'var(--red)'}">${getCfg(KEYS.fb)?'Connected':'Not set'}</div></div>
+  ${(user.email||'').toLowerCase()===ADMIN_EMAIL.toLowerCase()?`
+  <div class="ai2" onclick="openFirebaseSettings()"><div class="aic" style="background:rgba(255,183,0,.1)">🔐</div><div class="ail">App Settings</div><div class="aiv" style="color:${getCfg(KEYS.fb)?'var(--green)':'var(--red)'}">${getCfg(KEYS.fb)?'Connected':'Not set'}</div></div>
+  `:''}
   <div style="height:14px"></div>
   <div class="ash">Account</div>
   <div class="ai2" onclick="doSignOut()" style="border-color:rgba(239,68,68,.2)"><div class="aic" style="background:rgba(239,68,68,.1)">🚪</div><div class="ail" style="color:var(--red)">Sign Out</div></div>`;
